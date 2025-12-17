@@ -21,13 +21,17 @@ export default function DHT11Monitor(): JSX.Element {
       setError('');
       
       if (!navigator.bluetooth) {
-        setError('Web Bluetooth API no está disponible en este navegador');
+        setError('Web Bluetooth API no está disponible en este navegador. Usa Chrome en Android o computadora.');
         return;
       }
 
+      // Buscar TODOS los dispositivos Bluetooth cercanos
       const device: BluetoothDevice = await navigator.bluetooth.requestDevice({
-        filters: [{ services: ['0000ffe0-0000-1000-8000-00805f9b34fb'] }],
-        optionalServices: ['0000ffe0-0000-1000-8000-00805f9b34fb']
+        acceptAllDevices: true,
+        optionalServices: [
+          '0000ffe0-0000-1000-8000-00805f9b34fb', // UUID común HC-05/HC-06
+          '00001101-0000-1000-8000-00805f9b34fb'  // SPP (Serial Port Profile)
+        ]
       });
 
       const server: BluetoothRemoteGATTServer | undefined = await device.gatt?.connect();
@@ -36,8 +40,27 @@ export default function DHT11Monitor(): JSX.Element {
         throw new Error('No se pudo conectar al servidor GATT');
       }
 
-      const service: BluetoothRemoteGATTService = await server.getPrimaryService('0000ffe0-0000-1000-8000-00805f9b34fb');
-      const char: BluetoothRemoteGATTCharacteristic = await service.getCharacteristic('0000ffe1-0000-1000-8000-00805f9b34fb');
+      // Intentar conectar con el UUID estándar
+      let service: BluetoothRemoteGATTService;
+      let char: BluetoothRemoteGATTCharacteristic;
+      
+      try {
+        service = await server.getPrimaryService('0000ffe0-0000-1000-8000-00805f9b34fb');
+        char = await service.getCharacteristic('0000ffe1-0000-1000-8000-00805f9b34fb');
+      } catch (err) {
+        // Si falla, intentar con otro UUID común
+        try {
+          service = await server.getPrimaryService('00001101-0000-1000-8000-00805f9b34fb');
+          const characteristics = await service.getCharacteristics();
+          if (characteristics.length > 0) {
+            char = characteristics[0];
+          } else {
+            throw new Error('No se encontraron características');
+          }
+        } catch (err2) {
+          throw new Error('No se pudo conectar con los servicios del dispositivo. Asegúrate de seleccionar el HC-05 o HC-06.');
+        }
+      }
 
       await char.startNotifications();
       char.addEventListener('characteristicvaluechanged', handleData);
@@ -71,6 +94,7 @@ export default function DHT11Monitor(): JSX.Element {
     
     const decodedValue: string = new TextDecoder().decode(value);
     
+    // Formato esperado: "T:25.5,H:60.2" o similar
     const tempMatch: RegExpMatchArray | null = decodedValue.match(/T:?([\d.]+)/i);
     const humMatch: RegExpMatchArray | null = decodedValue.match(/H:?([\d.]+)/i);
     
